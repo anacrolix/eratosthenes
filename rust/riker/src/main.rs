@@ -37,8 +37,10 @@ impl Actor for Link {
                 self.next.tell(msg, None);
                 self.div = Some(msg);
                 self.next = ctx
+                    .system
                     .actor_of_args::<Link, _>(&format!("{}", msg), self.next.clone())
                     .unwrap();
+                // eprintln!("created {:?}", self.next.path());
             }
             Some(i) => {
                 if !msg.multiple_of(&i) {
@@ -47,26 +49,36 @@ impl Actor for Link {
             }
         }
     }
+    fn supervisor_strategy(&self) -> Strategy {
+        Strategy::Escalate
+    }
 }
 
 #[derive(Default)]
-struct Printer;
+struct Printer(i32);
 
 impl Actor for Printer {
     type Msg = Int;
     fn recv(&mut self, _: &Context<Self::Msg>, msg: Int, _: Sender) {
-        println!("{:?}", msg);
+        println!("{}", msg);
+        self.0 += 1;
+        if self.0 >= 10 {
+            panic!("shit");
+        }
+    }
+    fn supervisor_strategy(&self) -> Strategy {
+        Strategy::Escalate
     }
 }
 
 struct Generator {
     sink: ActorRef<Int>,
     cur: Int,
-    max: Int,
+    max: Option<Int>,
 }
 
-impl ActorFactoryArgs<(ActorRef<Int>, Int, Int)> for Generator {
-    fn create_args((sink, cur, max): (ActorRef<Int>, Int, Int)) -> Self {
+impl ActorFactoryArgs<(ActorRef<Int>, Int, Option<Int>)> for Generator {
+    fn create_args((sink, cur, max): (ActorRef<Int>, Int, Option<Int>)) -> Self {
         Generator { sink, cur, max }
     }
 }
@@ -79,7 +91,7 @@ impl Actor for Generator {
         ctx.myself.tell(Emit, None);
     }
     fn recv(&mut self, ctx: &Context<Self::Msg>, _: Self::Msg, _: Sender) {
-        if self.cur <= self.max {
+        if self.max.map_or(true, |max| self.cur <= max) {
             self.sink.tell(self.cur, None);
             self.cur.increment();
             ctx.myself.tell(Emit, None);
@@ -93,6 +105,9 @@ fn main() {
         .actor_of_args::<Link, _>("tail", system.actor_of::<Printer>("printer").unwrap())
         .unwrap();
     let _gen = system
-        .actor_of_args::<Generator, _>("generator", (tail, Int(2), Int(1000)))
+        .actor_of_args::<Generator, _>("generator", (tail, Int(2), None))
         .unwrap();
+    eprintln!("system tree:");
+    system.print_tree();
+    std::thread::park();
 }
